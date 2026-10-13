@@ -13,10 +13,47 @@ def load_env(path=Path(__file__).with_name(".env")):
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 load_env()
-MODEL = os.getenv("OPENAI_MODEL", "deepseek-flash")
-BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.deepseek.com").rstrip("/")
-CHAT_COMPLETIONS_URL = f"{BASE_URL}/chat/completions"
+
+def getenv(name, *fallbacks, default=None):
+    for key in (name, *fallbacks):
+        value = os.getenv(key)
+        if value:
+            return value
+    return default
+
+LLM_PROVIDER = getenv("LLM_PROVIDER", default="openai-compatible")
+API_KEY = getenv("LLM_API_KEY", "OPENAI_API_KEY")
+MODEL = getenv("LLM_MODEL", "OPENAI_MODEL", default="deepseek-flash")
+BASE_URL = getenv("LLM_BASE_URL", "OPENAI_BASE_URL", default="https://api.deepseek.com").rstrip("/")
+CHAT_COMPLETIONS_URL = getenv("LLM_CHAT_COMPLETIONS_URL", default=f"{BASE_URL}/chat/completions")
 MAX_STEPS = int(os.getenv("MAX_STEPS", "6"))
+
+class Provider:
+    def complete(self, messages, tools):
+        raise NotImplementedError
+
+class OpenAICompatibleProvider(Provider):
+    def __init__(self, api_key, model, chat_url):
+        if not api_key:
+            raise RuntimeError("Missing LLM_API_KEY. Put it in agent/.env or export it.")
+        self.api_key = api_key
+        self.model = model
+        self.chat_url = chat_url
+
+    def complete(self, messages, tools):
+        body = json.dumps({"model": self.model, "messages": messages, "tools": tools}).encode()
+        req = urllib.request.Request(self.chat_url, data=body, headers={
+            "Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return self.parse_response(json.load(r))
+
+    def parse_response(self, data):
+        return data["choices"][0]["message"]
+
+def build_provider():
+    if LLM_PROVIDER == "openai-compatible":
+        return OpenAICompatibleProvider(API_KEY, MODEL, CHAT_COMPLETIONS_URL)
+    raise RuntimeError(f"Unsupported LLM_PROVIDER={LLM_PROVIDER!r}; add a Provider adapter for it.")
 
 def now(city="local"):
     return f"{city}: {datetime.now().isoformat(timespec='seconds')}"
@@ -47,25 +84,17 @@ TOOLS = [
     tool("calc", "Calculate arithmetic like 2*(3+4).", {"expr": {"type": "string"}}, ["expr"]),
 ]
 
-def llm(messages):
-    if not os.getenv("OPENAI_API_KEY"):
-        raise RuntimeError("Missing OPENAI_API_KEY. Put it in agent/.env or export it.")
-    body = json.dumps({"model": MODEL, "messages": messages, "tools": TOOLS}).encode()
-    req = urllib.request.Request(CHAT_COMPLETIONS_URL, data=body, headers={
-        "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}", "Content-Type": "application/json","reasoning_effort":"low"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.load(r)["choices"][0]["message"]
-
 def dump(step, messages):
     print(f"\n--- step {step}: messages ---")
     print(json.dumps(messages, ensure_ascii=False, indent=2))
 
 def run(task):
+    provider = build_provider()
     messages = [{"role": "system", "content": "You are a tiny agent. Use tools when useful."},
                 {"role": "user", "content": task}]
     for step in range(1, MAX_STEPS + 1):
         dump(step, messages)
-        msg = llm(messages)
+        msg = provider.complete(messages, TOOLS)
         messages.append(msg)
         if not msg.get("tool_calls"):
             dump("final", messages)
