@@ -28,6 +28,17 @@ while step < MAX_STEPS:
 - [tools.py](tools.py)：本地工具和工具 schema。
 - [agent_loop.py](agent_loop.py)：Agent while 循环。
 
+当前进度：Iteration 1～3 已完成。Iteration 3 的消息规范化边界由
+[providers.py](providers.py) 负责，Agent 内部只使用标准化的
+`role`、`content`、`tool_calls`、`tool_call_id` 字段；Provider 私有字段只做日志，
+不会回传到下一轮请求。对应的离线测试在 [tests](tests/) 目录中，可运行：
+
+```bash
+python3 -m unittest discover -s agent/tests -v
+```
+
+当前仍未实现 API 重试、结构化终止原因、上下文裁剪、状态持久化和多模型路由；这些属于后续迭代。
+
 Agent 内部使用自己的 tool call 格式：
 
 ```json

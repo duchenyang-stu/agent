@@ -41,26 +41,53 @@ class OpenAICompatibleProvider(Provider):
         return [self.to_provider_message(m) for m in messages]
 
     def to_provider_message(self, msg):
-        if msg["role"] != "assistant" or not msg.get("tool_calls"):
-            return msg
-        return {
-            "role": "assistant",
-            "content": msg.get("content") or "",
-            "tool_calls": [self.to_provider_tool_call(c) for c in msg["tool_calls"]],
-        }
+        role = msg.get("role")
+        if role == "assistant" and msg.get("tool_calls"):
+            return {
+                "role": "assistant",
+                "content": msg.get("content") or "",
+                "tool_calls": [self.to_provider_tool_call(c) for c in msg["tool_calls"]],
+            }
+        if role == "tool":
+            if not msg.get("tool_call_id"):
+                raise ValueError(f"tool message missing tool_call_id: {msg}")
+            return {
+                "role": "tool",
+                "tool_call_id": msg["tool_call_id"],
+                "content": msg.get("content") or "",
+            }
+        if role in {"system", "user", "assistant"}:
+            return {"role": role, "content": msg.get("content") or ""}
+        raise ValueError(f"unsupported internal message role: {role!r}")
 
     def to_provider_tool_call(self, call):
+        if not isinstance(call, dict):
+            raise ValueError(f"tool call must be an object: {call!r}")
+        if not call.get("id"):
+            raise ValueError(f"tool call missing id: {call}")
+        if not call.get("name"):
+            raise ValueError(f"tool call missing name: {call}")
+        arguments = call.get("arguments", {})
+        if not isinstance(arguments, dict):
+            raise ValueError(f"tool call arguments must be an object: {arguments!r}")
         return {
             "id": call["id"],
             "type": "function",
             "function": {
                 "name": call["name"],
-                "arguments": json.dumps(call.get("arguments", {}), ensure_ascii=False),
+                "arguments": json.dumps(arguments, ensure_ascii=False),
             },
         }
 
     def from_provider_response(self, data):
-        raw = data["choices"][0]["message"]
+        if not isinstance(data, dict):
+            raise ValueError(f"provider response must be an object: {data!r}")
+        choices = data.get("choices")
+        if not isinstance(choices, list) or not choices:
+            raise ValueError(f"provider response has no choices: {data!r}")
+        raw = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if not isinstance(raw, dict):
+            raise ValueError(f"provider choice has no message: {choices[0]!r}")
         if self.show_meta:
             meta = {k: v for k, v in raw.items() if k not in {"role", "content", "tool_calls"}}
             if meta:
@@ -79,6 +106,8 @@ class OpenAICompatibleProvider(Provider):
         return msg
 
     def from_provider_tool_call(self, call):
+        if not isinstance(call, dict):
+            raise ValueError(f"tool call must be an object: {call!r}")
         fn = call.get("function") or {}
         if not call.get("id"):
             raise ValueError(f"tool call missing id: {call}")
