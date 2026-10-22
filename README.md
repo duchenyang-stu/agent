@@ -25,10 +25,10 @@ while step < MAX_STEPS:
 - [minimal_agent.py](minimal_agent.py)：命令行入口。
 - [config.py](config.py)：读取 `.env` 和运行配置。
 - [providers.py](providers.py)：provider adapter，负责内部格式和外部 API 格式的双向转换。
-- [tools.py](tools.py)：本地工具和工具 schema。
+- [tools.py](tools.py)：`Tool`、工具注册表和本地工具；从注册表生成工具 schema。
 - [agent_loop.py](agent_loop.py)：Agent while 循环。
 
-当前进度：Iteration 1～3 已完成。Iteration 3 的消息规范化边界由
+当前进度：Iteration 1～4 已完成（离线测试通过）。Iteration 3 的消息规范化边界由
 [providers.py](providers.py) 负责，Agent 内部只使用标准化的
 `role`、`content`、`tool_calls`、`tool_call_id` 字段；Provider 私有字段只做日志，
 不会回传到下一轮请求。对应的离线测试在 [tests](tests/) 目录中，可运行：
@@ -174,6 +174,63 @@ LLM_MODEL=another-model python3 agent/minimal_agent.py
 ### Iteration 4: 工具注册系统
 
 目标：从手写 `FUNCS` 和 `TOOLS` 进化到可维护的工具注册。
+
+当前实现：已删除手工维护的 `FUNCS` 和 `TOOLS`，改为一个 `ToolRegistry`。
+每个 `Tool` 同时包含 `name`、`description`、`parameters` 和 `handler`。
+`registry.schemas()` 生成给模型看的内部工具 schema，其中不包含 Python handler；
+Provider 再负责转换成外部 API 格式。`run_tool(call, registry=...)` 从同一个注册表查找并执行 handler。
+
+例如，在 [tools.py](tools.py) 中新增工具，只需定义函数并加上注册装饰器：
+
+```python
+@DEFAULT_REGISTRY.tool(
+    description="Double an integer.",
+    parameters={
+        "type": "object",
+        "properties": {"value": {"type": "integer"}},
+        "required": ["value"],
+    },
+)
+def double(value):
+    return value * 2
+```
+
+模块导入时会注册该函数，默认工具名就是函数名，也可以用 `name="..."` 显式指定。
+下次调用 `run(task)` 时会从注册表获取全部 schema，无需修改 Agent loop 或维护另一份工具列表。
+如果工具放在其他模块，必须先导入那个模块，装饰器才会执行。
+
+也可以直接注册一个 `Tool`，或者使用独立注册表隔离不同 Agent 的工具：
+
+```python
+from agent.agent_loop import run
+from agent.tools import Tool, ToolRegistry
+
+registry = ToolRegistry()
+registry.register(Tool(
+    name="double",
+    description="Double an integer.",
+    parameters={
+        "type": "object",
+        "properties": {"value": {"type": "integer"}},
+        "required": ["value"],
+    },
+    handler=lambda value: value * 2,
+))
+answer = run("算一下 4 的两倍", registry=registry)
+```
+
+`run()` 的注入接口现在是 `run(task, provider=None, registry=None)`。
+迭代 3 中独立的 `tools` 和 `tool_runner` 参数已合并为 `registry`，确保模型可见 schema 和
+实际执行的 handler 来自同一个来源；测试用的临时工具也通过独立注册表注册。
+
+注册表拒绝重复工具名，避免静默覆盖；导出的 schema 是副本，修改它不会改变注册表。
+执行前会检查 arguments 是字典，并用 Python 函数签名检查缺失参数和多余参数。
+目前不会根据 JSON Schema 校验参数值的类型或范围，例如 `integer`、`enum`、`minimum`；
+需要这些限制的工具应在 handler 中校验。工具成功时注册表返回原始结果，异常继续交给 Agent loop，
+由循环统一包装为 `{"ok": true, "result": ...}` 或 `{"ok": false, "error": ...}` 并回传模型。
+
+对应测试为 [test_tools.py](tests/test_tools.py) 和 [test_agent_loop.py](tests/test_agent_loop.py)，
+覆盖注册、schema 隔离、重复名称、未知工具、参数绑定、原有工具，以及新工具的完整调用往返。
 
 要实现：
 

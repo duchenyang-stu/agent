@@ -3,11 +3,11 @@ import json
 try:
     from . import config
     from .providers import build_provider
-    from .tools import TOOLS, run_tool
+    from .tools import DEFAULT_REGISTRY
 except ImportError:
     import config
     from providers import build_provider
-    from tools import TOOLS, run_tool
+    from tools import DEFAULT_REGISTRY
 
 
 def dump(step, messages):
@@ -15,10 +15,10 @@ def dump(step, messages):
     print(json.dumps(messages, ensure_ascii=False, indent=2))
 
 
-def run(task, provider=None, tools=None, tool_runner=None):
+def run(task, provider=None, registry=None):
     provider = provider or build_provider()
-    tools = TOOLS if tools is None else tools
-    tool_runner = tool_runner or run_tool
+    registry = DEFAULT_REGISTRY if registry is None else registry
+    tools = registry.schemas()
     messages = [
         {"role": "system", "content": "You are a tiny agent. Use tools when useful."},
         {"role": "user", "content": task},
@@ -32,7 +32,7 @@ def run(task, provider=None, tools=None, tool_runner=None):
             return msg.get("content", "")
         for call in msg["tool_calls"]:
             try:
-                out = {"ok": True, "result": tool_runner(call)}
+                out = {"ok": True, "result": registry.run_tool(call)}
             except Exception as e:
                 out = {"ok": False, "error": repr(e)}
             messages.append({
