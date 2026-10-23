@@ -1,3 +1,4 @@
+# Agent教学版，从最基础的llm循环一步一步搭建一个完善的agent项目
 # Agent From Scratch
 
 这个目录的目标不是直接用成熟框架，而是从最小 while 循环开始，分 10 次迭代自己实现一遍 Agent。路线的核心判断是：
