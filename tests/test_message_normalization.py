@@ -3,7 +3,7 @@ import io
 import json
 import unittest
 
-from agent.providers import OpenAICompatibleProvider
+from agent.providers import OpenAICompatibleProvider, ProviderError
 
 
 def make_provider(show_meta=False):
@@ -122,11 +122,12 @@ class MessageNormalizationTest(unittest.TestCase):
     def test_invalid_tool_arguments_are_rejected(self):
         provider = make_provider()
 
-        with self.assertRaisesRegex(ValueError, "arguments must be JSON"):
+        with self.assertRaisesRegex(ProviderError, "arguments must be JSON") as raised:
             provider.from_provider_tool_call({
                 "id": "call_1",
                 "function": {"name": "calc", "arguments": "not-json"},
             })
+        self.assertEqual(raised.exception.error_type, "invalid_tool_arguments")
 
     def test_internal_non_object_tool_arguments_are_rejected(self):
         provider = make_provider()
@@ -141,11 +142,12 @@ class MessageNormalizationTest(unittest.TestCase):
     def test_non_object_tool_arguments_are_rejected(self):
         provider = make_provider()
 
-        with self.assertRaisesRegex(ValueError, "decode to object"):
+        with self.assertRaisesRegex(ProviderError, "decode to object") as raised:
             provider.from_provider_tool_call({
                 "id": "call_1",
                 "function": {"name": "calc", "arguments": "[]"},
             })
+        self.assertEqual(raised.exception.error_type, "invalid_tool_arguments")
 
     def test_malformed_provider_response_is_rejected_clearly(self):
         provider = make_provider()

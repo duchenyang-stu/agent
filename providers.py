@@ -1,4 +1,6 @@
 import json
+import socket
+import urllib.error
 import urllib.request
 
 try:
@@ -12,14 +14,26 @@ class Provider:
         raise NotImplementedError
 
 
+class ProviderError(RuntimeError):
+    def __init__(self, error_type, message, *, retryable=False, status_code=None):
+        super().__init__(message)
+        self.error_type = error_type
+        self.retryable = retryable
+        self.status_code = status_code
+        self.attempts = 1
+
+
 class OpenAICompatibleProvider(Provider):
-    def __init__(self, api_key, model, chat_url, show_meta=True):
+    RETRYABLE_STATUS_CODES = {408, 409, 429}
+
+    def __init__(self, api_key, model, chat_url, show_meta=True, timeout=60):
         if not api_key:
             raise RuntimeError("Missing LLM_API_KEY. Put it in agent/.env or export it.")
         self.api_key = api_key
         self.model = model
         self.chat_url = chat_url
         self.show_meta = show_meta
+        self.timeout = timeout
 
     def complete(self, messages, tools):
         body = json.dumps({
@@ -31,8 +45,32 @@ class OpenAICompatibleProvider(Provider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         })
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return self.from_provider_response(json.load(r))
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                try:
+                    data = json.load(r)
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    raise ProviderError(
+                        "invalid_response", "provider response is not valid JSON",
+                    ) from e
+        except urllib.error.HTTPError as e:
+            retryable = e.code in self.RETRYABLE_STATUS_CODES or 500 <= e.code < 600
+            raise ProviderError(
+                "http_error",
+                f"provider HTTP {e.code}: {e.reason}",
+                retryable=retryable,
+                status_code=e.code,
+            ) from e
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as e:
+            raise ProviderError(
+                "network_error", f"provider network error: {e}", retryable=True,
+            ) from e
+        try:
+            return self.from_provider_response(data)
+        except ProviderError:
+            raise
+        except ValueError as e:
+            raise ProviderError("invalid_response", str(e)) from e
 
     def to_provider_tools(self, tools):
         return [{"type": "function", "function": tool} for tool in tools]
@@ -117,9 +155,15 @@ class OpenAICompatibleProvider(Provider):
         try:
             args = json.loads(args_text) if isinstance(args_text, str) else args_text
         except json.JSONDecodeError as e:
-            raise ValueError(f"tool call arguments must be JSON: {args_text}") from e
+            raise ProviderError(
+                "invalid_tool_arguments",
+                f"tool call arguments must be JSON: {args_text}",
+            ) from e
         if not isinstance(args, dict):
-            raise ValueError(f"tool call arguments must decode to object: {args}")
+            raise ProviderError(
+                "invalid_tool_arguments",
+                f"tool call arguments must decode to object: {args}",
+            )
         return {"id": call["id"], "name": fn["name"], "arguments": args}
 
 
@@ -130,5 +174,6 @@ def build_provider():
             config.MODEL,
             config.CHAT_COMPLETIONS_URL,
             config.SHOW_PROVIDER_META,
+            config.API_TIMEOUT,
         )
     raise RuntimeError(f"Unsupported LLM_PROVIDER={config.LLM_PROVIDER!r}; add a Provider adapter for it.")

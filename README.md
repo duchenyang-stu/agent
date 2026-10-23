@@ -28,7 +28,7 @@ while step < MAX_STEPS:
 - [tools.py](tools.py)：`Tool`、工具注册表和本地工具；从注册表生成工具 schema。
 - [agent_loop.py](agent_loop.py)：Agent while 循环。
 
-当前进度：Iteration 1～4 已完成（离线测试通过）。Iteration 3 的消息规范化边界由
+当前进度：Iteration 1～5 已完成（离线测试通过）。Iteration 3 的消息规范化边界由
 [providers.py](providers.py) 负责，Agent 内部只使用标准化的
 `role`、`content`、`tool_calls`、`tool_call_id` 字段；Provider 私有字段只做日志，
 不会回传到下一轮请求。对应的离线测试在 [tests](tests/) 目录中，可运行：
@@ -37,7 +37,7 @@ while step < MAX_STEPS:
 python3 -m unittest discover -s agent/tests -v
 ```
 
-当前仍未实现 API 重试、结构化终止原因、上下文裁剪、状态持久化和多模型路由；这些属于后续迭代。
+当前仍未实现上下文裁剪、状态持久化和多模型路由；这些属于后续迭代。
 
 Agent 内部使用自己的 tool call 格式：
 
@@ -253,6 +253,53 @@ answer = run("算一下 4 的两倍", registry=registry)
 ### Iteration 5: 错误处理、重试和终止条件
 
 目标：让 Agent 不会因为一次工具错误或 API 错误直接崩掉，也不会无限循环。
+
+当前实现：Provider 将 API 异常统一转换为 `ProviderError`，记录 `error_type`、
+`retryable`、`status_code` 和最终请求次数。网络错误以及 HTTP 408、409、429、5xx
+会按指数退避重试，其他 4xx、非法 JSON 和不符合协议的响应立即失败。
+`MAX_API_RETRIES` 表示首次请求之后允许的重试次数，例如值为 `2` 时最多发起 3 次请求。
+
+工具注册表将失败分为三类，并作为结构化结果回传模型：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "type": "invalid_arguments",
+    "message": "invalid arguments for tool 'calc': ..."
+  }
+}
+```
+
+错误类型包括 `unknown_tool`、`invalid_arguments`、`tool_execution_error`。
+每次失败都会增加本次运行的工具错误计数；达到 `MAX_TOOL_ERRORS` 后停止，避免模型无限重试。
+
+`run()` 现在返回 `RunResult`，调用方不再通过字符串内容猜测运行是否成功：
+
+```python
+result = run("现在几点？")
+if result.ok:
+    print(result.answer)
+else:
+    print(result.stop_reason, result.error)
+```
+
+`stop_reason` 有四种：`final_answer`、`max_steps`、`api_error`、`tool_error_limit`。
+结果还包含 `steps`、`messages`、`tool_errors` 和可选的结构化 `error`。
+`str(result)` 保留面向命令行的可读输出，所以原有 `print(run(task))` 仍然可用。
+
+相关运行配置：
+
+```env
+MAX_STEPS=6
+MAX_API_RETRIES=2
+RETRY_BASE_DELAY=0.5
+MAX_TOOL_ERRORS=3
+LLM_API_TIMEOUT=60
+```
+
+重试测试会替换真实休眠函数，不访问网络。Provider 测试通过模拟 HTTP 401、429、
+网络超时、非法 JSON 和畸形响应验证错误分类。
 
 要实现：
 

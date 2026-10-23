@@ -29,4 +29,8 @@ MODEL = getenv("LLM_MODEL", "OPENAI_MODEL", default="deepseek-flash")
 BASE_URL = getenv("LLM_BASE_URL", "OPENAI_BASE_URL", default="https://api.deepseek.com").rstrip("/")
 CHAT_COMPLETIONS_URL = getenv("LLM_CHAT_COMPLETIONS_URL", default=f"{BASE_URL}/chat/completions")
 MAX_STEPS = int(os.getenv("MAX_STEPS", "6"))
+MAX_API_RETRIES = int(os.getenv("MAX_API_RETRIES", "2"))
+RETRY_BASE_DELAY = float(os.getenv("RETRY_BASE_DELAY", "0.5"))
+MAX_TOOL_ERRORS = int(os.getenv("MAX_TOOL_ERRORS", "3"))
+API_TIMEOUT = float(os.getenv("LLM_API_TIMEOUT", "60"))
 SHOW_PROVIDER_META = os.getenv("SHOW_PROVIDER_META", "1") != "0"

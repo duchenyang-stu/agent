@@ -7,6 +7,27 @@ from datetime import datetime
 from typing import Callable
 
 
+class ToolError(RuntimeError):
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
+class UnknownToolError(ToolError):
+    def __init__(self, name):
+        super().__init__("unknown_tool", f"unknown tool: {name!r}")
+
+
+class InvalidToolArgumentsError(ToolError):
+    def __init__(self, name, message):
+        super().__init__("invalid_arguments", f"invalid arguments for tool {name!r}: {message}")
+
+
+class ToolExecutionError(ToolError):
+    def __init__(self, name, message):
+        super().__init__("tool_execution_error", f"tool {name!r} failed: {message}")
+
+
 @dataclass(frozen=True)
 class Tool:
     name: str
@@ -53,19 +74,22 @@ class ToolRegistry:
 
     def run_tool(self, call):
         if not isinstance(call, dict):
-            raise ValueError("tool call must be an object")
+            raise ToolError("invalid_arguments", "tool call must be an object")
         name = call.get("name")
         if not isinstance(name, str) or name not in self._tools:
-            raise ValueError(f"unknown tool: {name!r}")
+            raise UnknownToolError(name)
         arguments = call.get("arguments", {})
         if not isinstance(arguments, dict):
-            raise ValueError(f"tool arguments must be an object: {name}")
+            raise InvalidToolArgumentsError(name, "arguments must be an object")
         handler = self._tools[name].handler
         try:
             inspect.signature(handler).bind(**arguments)
         except TypeError as e:
-            raise ValueError(f"invalid arguments for tool {name!r}: {e}") from e
-        return handler(**arguments)
+            raise InvalidToolArgumentsError(name, str(e)) from e
+        try:
+            return handler(**arguments)
+        except Exception as e:
+            raise ToolExecutionError(name, str(e)) from e
 
 
 DEFAULT_REGISTRY = ToolRegistry()

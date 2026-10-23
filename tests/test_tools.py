@@ -1,6 +1,15 @@
 import unittest
 
-from agent.tools import DEFAULT_REGISTRY, Tool, ToolRegistry, run_tool
+from agent.tools import (
+    DEFAULT_REGISTRY,
+    InvalidToolArgumentsError,
+    Tool,
+    ToolError,
+    ToolExecutionError,
+    ToolRegistry,
+    UnknownToolError,
+    run_tool,
+)
 
 
 class ToolRegistryTest(unittest.TestCase):
@@ -56,8 +65,13 @@ class ToolRegistryTest(unittest.TestCase):
         )
 
     def test_unknown_tool_has_a_clear_error(self):
-        with self.assertRaisesRegex(ValueError, "unknown tool: 'missing'"):
+        with self.assertRaisesRegex(UnknownToolError, "unknown tool: 'missing'"):
             ToolRegistry().run_tool({"name": "missing", "arguments": {}})
+
+    def test_non_object_tool_call_is_an_argument_error(self):
+        with self.assertRaisesRegex(ToolError, "tool call must be an object") as raised:
+            ToolRegistry().run_tool([])
+        self.assertEqual(raised.exception.code, "invalid_arguments")
 
     def test_invalid_arguments_are_rejected_before_handler_execution(self):
         registry = ToolRegistry()
@@ -81,7 +95,7 @@ class ToolRegistryTest(unittest.TestCase):
             ({"text": "hello", "unexpected": True}, "invalid arguments"),
         ]:
             with self.subTest(arguments=arguments):
-                with self.assertRaisesRegex(ValueError, error):
+                with self.assertRaisesRegex(InvalidToolArgumentsError, error):
                     registry.run_tool({"name": "remember", "arguments": arguments})
 
         self.assertEqual(executed, [])
@@ -105,7 +119,7 @@ class ToolRegistryTest(unittest.TestCase):
             raise TypeError("handler failed internally")
 
         registry.register(Tool("broken", "Fail", {"type": "object"}, broken))
-        with self.assertRaisesRegex(TypeError, "handler failed internally"):
+        with self.assertRaisesRegex(ToolExecutionError, "handler failed internally"):
             registry.run_tool({"name": "broken"})
 
     def test_registries_are_isolated(self):
